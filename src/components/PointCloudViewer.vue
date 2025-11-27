@@ -111,10 +111,14 @@ const createPointCloudByClass = (cloud: PointCloud): THREE.Points => {
   const positions = new Float32Array(cloud.points.length * 3)
   const colors = new Float32Array(cloud.points.length * 3)
 
+  // Коэффициент масштабирования
+  const scale = 2.0
+
   cloud.points.forEach((p, i) => {
-    positions[i * 3] = p.x - cloud.center.x
-    positions[i * 3 + 1] = p.z - cloud.center.z // Z вверх
-    positions[i * 3 + 2] = p.y - cloud.center.y
+    // Исходные координаты с масштабированием
+    positions[i * 3] = p.x * scale      // X
+    positions[i * 3 + 1] = p.y * scale  // Y (вертикальная ось)
+    positions[i * 3 + 2] = p.z * scale  // Z
 
     const colorHex = CLASS_COLORS[p.classId] || 0x888888
     const color = new THREE.Color(colorHex)
@@ -127,7 +131,7 @@ const createPointCloudByClass = (cloud: PointCloud): THREE.Points => {
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
 
   const material = new THREE.PointsMaterial({
-    size: 0.3,
+    size: 0.3 * scale,
     vertexColors: true,
     transparent: true,
     opacity: 0.9,
@@ -143,6 +147,9 @@ const createDiffCloud = (before: PointCloud, after: PointCloud): THREE.Points =>
   const positions = new Float32Array(len * 3)
   const colors = new Float32Array(len * 3)
 
+  // Коэффициент масштабирования
+  const scale = 2.0
+
   const matchColor = new THREE.Color(0x67c23a) // Зелёный - совпадает
   const diffColor = new THREE.Color(0xf56c6c) // Красный - различается
 
@@ -153,9 +160,10 @@ const createDiffCloud = (before: PointCloud, after: PointCloud): THREE.Points =>
     // Проверяем что точки существуют
     if (!bp || !ap) continue
 
-    positions[i * 3] = bp.x - before.center.x
-    positions[i * 3 + 1] = bp.z - before.center.z
-    positions[i * 3 + 2] = bp.y - before.center.y
+    // Исходные координаты с масштабированием
+    positions[i * 3] = bp.x * scale      // X
+    positions[i * 3 + 1] = bp.y * scale  // Y (вертикальная ось)
+    positions[i * 3 + 2] = bp.z * scale  // Z
 
     const isMatch = bp.classId === ap.classId
     const color = isMatch ? matchColor : diffColor
@@ -169,7 +177,7 @@ const createDiffCloud = (before: PointCloud, after: PointCloud): THREE.Points =>
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
 
   const material = new THREE.PointsMaterial({
-    size: 0.3,
+    size: 0.3 * scale,
     vertexColors: true,
     transparent: true,
     opacity: 0.9,
@@ -205,18 +213,7 @@ const updateScene = () => {
 
   if (currentPoints) {
     scene.add(currentPoints)
-  }
-
-  // Настраиваем камеру
-  if (cloud) {
-    const size = Math.max(
-      cloud.bounds.max.x - cloud.bounds.min.x,
-      cloud.bounds.max.y - cloud.bounds.min.y,
-      cloud.bounds.max.z - cloud.bounds.min.z,
-    )
-    camera.position.set(size, size, size)
-    camera.lookAt(0, 0, 0)
-    controls.update()
+    resetCamera()
   }
 }
 
@@ -226,16 +223,40 @@ const setView = (mode: 'before' | 'after' | 'diff') => {
 }
 
 const resetCamera = () => {
-  const cloud = props.beforeCloud || props.afterCloud
+  let cloud: PointCloud | null = null
+  
+  if (viewMode.value === 'before' && props.beforeCloud) {
+    cloud = props.beforeCloud
+  } else if (viewMode.value === 'after' && props.afterCloud) {
+    cloud = props.afterCloud
+  } else if (viewMode.value === 'diff' && props.beforeCloud) {
+    cloud = props.beforeCloud
+  }
+  
   if (cloud) {
-    const size = Math.max(
-      cloud.bounds.max.x - cloud.bounds.min.x,
-      cloud.bounds.max.y - cloud.bounds.min.y,
-      cloud.bounds.max.z - cloud.bounds.min.z,
+    const scale = 2.0
+    
+    const sizeX = (cloud.bounds.max.x - cloud.bounds.min.x) * scale
+    const sizeY = (cloud.bounds.max.y - cloud.bounds.min.y) * scale
+    const sizeZ = (cloud.bounds.max.z - cloud.bounds.min.z) * scale
+    const size = Math.max(sizeX, sizeY, sizeZ)
+    
+    // Центр облака
+    const center = {
+      x: (cloud.bounds.min.x + cloud.bounds.max.x) / 2 * scale,
+      y: (cloud.bounds.min.y + cloud.bounds.max.y) / 2 * scale,
+      z: (cloud.bounds.min.z + cloud.bounds.max.z) / 2 * scale
+    }
+    
+    const distance = size * 1.5
+    camera.position.set(
+      center.x + distance, 
+      center.y + distance * 0.5, 
+      center.z + distance
     )
-    camera.position.set(size, size, size)
-    camera.lookAt(0, 0, 0)
-    controls.reset()
+    camera.lookAt(center.x, center.y, center.z)
+    controls.target.set(center.x, center.y, center.z)
+    controls.update()
   }
 }
 
@@ -250,8 +271,8 @@ const initThree = () => {
   scene.background = new THREE.Color(0x1a1a2e)
 
   // Camera
-  camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 10000)
-  camera.position.set(100, 100, 100)
+  camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 100000)
+  camera.position.set(100, 50, 100)
 
   // Renderer
   renderer = new THREE.WebGLRenderer({
@@ -265,15 +286,37 @@ const initThree = () => {
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.05
-  controls.minDistance = 1
-  controls.maxDistance = 5000
+  controls.minDistance = 0.01 // Еще меньше
+  controls.maxDistance = 100000
+  controls.zoomSpeed = 3.0 // Еще быстрее
+  controls.target.set(0, 0, 0)
+  controls.autoRotate = false
+
+  // Настройки зума
+  controls.zoomSpeed = 2.0
+  controls.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.DOLLY,
+    RIGHT: THREE.MOUSE.PAN
+  }
 
   // Grid
-  const grid = new THREE.GridHelper(200, 50, 0x444444, 0x333333)
+  const gridSize = 1000
+  const gridDivisions = 50
+  const grid = new THREE.GridHelper(gridSize, gridDivisions, 0x444444, 0x333333)
   scene.add(grid)
 
-  // Axes
-  const axes = new THREE.AxesHelper(50)
+  // Axes - маленькие и полупрозрачные
+  const axes = new THREE.AxesHelper(30)
+  axes.setColors(
+    new THREE.Color(0x8888ff), // X - светло-синий
+    new THREE.Color(0x88ff88), // Y - светло-зеленый
+    new THREE.Color(0xff8888)  // Z - светло-красный
+  )
+  axes.children.forEach((line) => {
+    line.material.transparent = true
+    line.material.opacity = 0.2
+  })
   scene.add(axes)
 
   // Animation loop
